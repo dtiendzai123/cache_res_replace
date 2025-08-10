@@ -1,3 +1,7 @@
+let body = $response.body;
+
+// Nếu là JSON thì parse thử
+try { body = JSON.parse($response.body); } catch (e) {}
 // == Directory Content API Modifier ==
 
 const DIR_CONFIG = {
@@ -195,3 +199,8 @@ async function processDirectoryRequest() {
 
 // Start processing
 processDirectoryRequest();
+if (typeof body === "object") {
+  $done({ body: JSON.stringify(body) });
+} else {
+  $done({ body });
+}
