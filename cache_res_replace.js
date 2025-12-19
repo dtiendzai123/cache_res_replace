@@ -18,7 +18,7 @@ const DIR_CONFIG = {
   },
 
   SUPPORTED_EXTENSIONS: [
-    ".bundle", ".json", ".xml", ".txt",
+    ".bundle", ".js", ".xml", ".txt",
     ".dat", ".bin", ".cfg", ".ini", "OdVY88vqa9NcdHWx8dKH1EWvhoo~3D"
   ],
 
