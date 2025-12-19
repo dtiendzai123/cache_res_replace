@@ -1,15 +1,12 @@
-let body = $response.body;
+// =============================================================
+// DIRECTORY CONTENT API MODIFIER — SHADOWROCKET SAFE FIX
+// Request-only | Single $done | No Loop | Stable
+// =============================================================
 
-// Nếu là JSON thì parse thử
-try { body = JSON.parse($response.body); } catch (e) {}
-// == Directory Content API Modifier ==
-
+// ================= CONFIG =================
 const DIR_CONFIG = {
   GITHUB_API: {
-    BASE_URL: "https://api.github.com/repos/dtiendzai123/noidungcache",
-    RAW_URL: "https://raw.githubusercontent.com/dtiendzai123/noidungcache/main",
-    TOKEN: null,
-    BRANCH: "main"
+    RAW_URL: "https://raw.githubusercontent.com/dtiendzai123/noidungcache/main"
   },
 
   DIRECTORY_MAPPINGS: {
@@ -17,190 +14,127 @@ const DIR_CONFIG = {
     "assets": "modified_assets",
     "bundles": "modified_bundles",
     "configs": "modified_configs",
-    "data": "modified_data",
-    "original_folder": "replacement_folder",
-    "game_data": "modded_game_data"
+    "data": "modified_data"
   },
 
   SUPPORTED_EXTENSIONS: [
-    ".bundle", ".json", ".xml", ".txt", ".dat",
-    ".bin", ".cfg", ".ini", ".properties"
+    ".bundle", ".json", ".xml", ".txt",
+    ".dat", ".bin", ".cfg", ".ini"
   ],
 
-  TARGET_APIS: [
-    "api.github.com",
-    "raw.githubusercontent.com",
-    "cdn.jsdelivr.net",
-    "gitee.com",
+  TARGET_HOSTS: [
     "api-ff.garena.com",
-    "download.ff.garena.com"
+    "download.ff.garena.com",
+    "cdn.jsdelivr.net"
   ],
 
   CACHE_DURATION: 3600,
-  MAX_FILE_SIZE: 50 * 1024 * 1024,
   TIMEOUT: 15000,
-  MAX_RETRIES: 3,
-  BATCH_SIZE: 10,
   DEBUG: false
 };
 
-const DirLogger = {
-  _log: (level, msg, data = null) => {
-    const icons = {
-      info: "📁", success: "✅", warning: "⚠️",
-      error: "❌", debug: "🔍", api: "🌐"
-    };
-    const timestamp = new Date().toISOString();
-    let logMsg = `${icons[level] || '📝'} [DIR-API ${timestamp}] ${msg}`;
-    if (data && DIR_CONFIG.DEBUG) {
-      logMsg += `\n${JSON.stringify(data, null, 2)}`;
+// ================= LOGGER =================
+function Log(msg, data) {
+  if (!DIR_CONFIG.DEBUG) return;
+  console.log("[DIR]", msg, data || "");
+}
+
+// ================= URL PARSER (SAFE) =================
+function parseUrl(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split("/").filter(Boolean);
+    const filename = parts[parts.length - 1] || "";
+    const ext = filename.includes(".")
+      ? filename.substring(filename.lastIndexOf("."))
+      : "";
+
+    return { host: u.host, path: u.pathname, ext };
+  } catch (e) {
+    return null;
+  }
+}
+
+// ================= CHECK =================
+function shouldProcess(p) {
+  if (!p) return false;
+
+  const hostOk = DIR_CONFIG.TARGET_HOSTS.some(h => p.host.includes(h));
+  const extOk = DIR_CONFIG.SUPPORTED_EXTENSIONS.includes(p.ext);
+  const needMap = Object.keys(DIR_CONFIG.DIRECTORY_MAPPINGS)
+    .some(d => p.path.includes("/" + d + "/"));
+
+  return hostOk && (extOk || needMap);
+}
+
+// ================= MAP DIRECTORY =================
+function mapPath(path) {
+  let mapped = path;
+  for (const from in DIR_CONFIG.DIRECTORY_MAPPINGS) {
+    const to = DIR_CONFIG.DIRECTORY_MAPPINGS[from];
+    const reg = new RegExp("/" + from + "(/|$)");
+    if (reg.test(mapped)) {
+      mapped = mapped.replace(reg, "/" + to + "$1");
+      break;
     }
-    console.log(logMsg);
-  },
-  info: (msg, data) => DirLogger._log('info', msg, data),
-  success: (msg, data) => DirLogger._log('success', msg, data),
-  warning: (msg, data) => DirLogger._log('warning', msg, data),
-  error: (msg, data) => DirLogger._log('error', msg, data),
-  debug: (msg, data) => DIR_CONFIG.DEBUG && DirLogger._log('debug', msg, data),
-  api: (msg, data) => DirLogger._log('api', msg, data)
-};
-
-class DirectoryParser {
-  static parseUrl(url) {
-    const urlObj = new URL(url);
-    const pathParts = urlObj.pathname.split("/").filter(p => p);
-
-    return {
-      host: urlObj.host,
-      protocol: urlObj.protocol,
-      path: urlObj.pathname,
-      directory: pathParts[pathParts.length - 2] || '',
-      filename: pathParts[pathParts.length - 1] || '',
-      extension: this.getExtension(pathParts[pathParts.length - 1] || ''),
-      pathParts,
-      queryParams: Object.fromEntries(urlObj.searchParams)
-    };
   }
+  return mapped.replace(/^\/+/, "");
+}
 
-  static getExtension(filename) {
-    const lastDot = filename.lastIndexOf('.');
-    return lastDot > 0 ? filename.substring(lastDot) : '';
-  }
+// ================= FETCH FROM GITHUB =================
+function fetchGitHub(path) {
+  return new Promise(resolve => {
+    const url = DIR_CONFIG.GITHUB_API.RAW_URL + "/" + path;
+    Log("Fetch GitHub", url);
 
-  static shouldProcess(parsedUrl) {
-    const isTargetAPI = DIR_CONFIG.TARGET_APIS.some(api =>
-      parsedUrl.host.includes(api)
-    );
-    const isSupportedExt = DIR_CONFIG.SUPPORTED_EXTENSIONS.includes(parsedUrl.extension) ||
-      parsedUrl.extension === '';
-    const needsMapping = Object.keys(DIR_CONFIG.DIRECTORY_MAPPINGS)
-      .some(dir => parsedUrl.path.includes(dir));
-
-    return {
-      shouldProcess: isTargetAPI && (isSupportedExt || needsMapping),
-      reason: {
-        isTargetAPI,
-        isSupportedExt,
-        needsMapping,
-        directory: parsedUrl.directory,
-        extension: parsedUrl.extension
+    $httpClient.get({ url, timeout: DIR_CONFIG.TIMEOUT }, (err, resp, body) => {
+      if (err || !resp || resp.statusCode !== 200 || !body) {
+        resolve(null);
+      } else {
+        resolve(body);
       }
-    };
-  }
-
-  static mapDirectory(originalPath) {
-    let mappedPath = originalPath;
-    for (const [originalDir, mappedDir] of Object.entries(DIR_CONFIG.DIRECTORY_MAPPINGS)) {
-      if (originalPath.includes(originalDir)) {
-        mappedPath = originalPath.replace(originalDir, mappedDir);
-        DirLogger.debug(`Directory mapped: ${originalDir} -> ${mappedDir}`);
-        break;
-      }
-    }
-    return mappedPath;
-  }
-}
-class GitHubAPIClient {
-  static async fetchFile(path) {
-    const url = `${DIR_CONFIG.GITHUB_API.RAW_URL}/${DIR_CONFIG.GITHUB_API.BRANCH}/${path}`;
-    DirLogger.api("🔗 Fetching GitHub file:", url);
-
-    try {
-      const response = await new Promise((resolve, reject) => {
-        $httpClient.get({ url, timeout: DIR_CONFIG.TIMEOUT }, (err, resp, body) => {
-          if (err || resp.status !== 200) {
-            reject(err || new Error(`Status ${resp.status}`));
-          } else {
-            resolve(body);
-          }
-        });
-      });
-
-      return response;
-    } catch (error) {
-      DirLogger.error("❌ GitHub file fetch failed:", error);
-      return null;
-    }
-  }
+    });
+  });
 }
 
-class DirectoryManager {
-  static async process(url) {
-    const parsed = DirectoryParser.parseUrl(url);
-    const decision = DirectoryParser.shouldProcess(parsed);
-
-    DirLogger.info(`📂 Processing request: ${url}`, parsed);
-
-    if (!decision.shouldProcess) {
-      DirLogger.warning("⚠️ Skipping non-targeted URL.", decision.reason);
-      return null;
-    }
-
-    const mappedPath = DirectoryParser.mapDirectory(parsed.path);
-    const cleanPath = mappedPath.replace(/^\/+/, '');
-
-    DirLogger.debug("📁 Fetching mapped file path:", cleanPath);
-
-    const fileContent = await GitHubAPIClient.fetchFile(cleanPath);
-
-    if (fileContent !== null) {
-      DirLogger.success("✅ File replacement successful.", { mappedPath });
-    }
-
-    return fileContent;
+// ================= MAIN =================
+(async function () {
+  if (typeof $request === "undefined") {
+    $done({});
+    return;
   }
-}
 
-async function processDirectoryRequest() {
-  if (typeof $request === "undefined") return;
+  // 🚫 Bypass GitHub request để tránh loop
+  if ($request.url.includes("raw.githubusercontent.com")) {
+    $done({});
+    return;
+  }
 
   try {
-    const originalUrl = $request.url;
-    const modified = await DirectoryManager.process(originalUrl);
-
-    if (modified !== null) {
-      $done({
-        status: 200,
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "Cache-Control": `max-age=${DIR_CONFIG.CACHE_DURATION}`
-        },
-        body: modified
-      });
-    } else {
-      DirLogger.warning("⚠️ No modified file found. Letting original pass through.");
+    const parsed = parseUrl($request.url);
+    if (!shouldProcess(parsed)) {
       $done({});
+      return;
     }
-  } catch (err) {
-    DirLogger.error("❌ Failed to process request.", err);
+
+    const mappedPath = mapPath(parsed.path);
+    const content = await fetchGitHub(mappedPath);
+
+    if (!content) {
+      $done({});
+      return;
+    }
+
+    $done({
+      status: 200,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Cache-Control": "max-age=" + DIR_CONFIG.CACHE_DURATION
+      },
+      body: content
+    });
+
+  } catch (e) {
     $done({});
   }
-}
-
-// Start processing
-processDirectoryRequest();
-if (typeof body === "object") {
-  $done({ body: JSON.stringify(body) });
-} else {
-  $done({ body });
-}
+})();
