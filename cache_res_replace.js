@@ -6,7 +6,7 @@
 // ================= CONFIG =================
 const DIR_CONFIG = {
   GITHUB_API: {
-    RAW_URL: "https://raw.githubusercontent.com/dtiendzai123/noidungcache/main"
+    RAW_URL: "https://raw.githubusercontent.com/dtiendzai123/noidungcache/main/cache_res.OdVY88vqa9NcdHWx8dKH1EWvhoo~3D%20.bundle.base64"
   },
 
   DIRECTORY_MAPPINGS: {
